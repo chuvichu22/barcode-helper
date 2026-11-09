@@ -48,6 +48,7 @@ li button{width:100%;text-align:left;background:#fff;border:2px solid var(--line
 .order-item:last-child{border-bottom:0}
 .order-qty{display:flex;align-items:center;gap:8px}
 .order-qty button{width:34px;height:34px;border-radius:8px;border:2px solid var(--line);background:#fff;font-weight:700}
+.date-edit{font-size:14px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;width:130px}
 </style>
 </head>
 <body>
@@ -60,7 +61,7 @@ li button{width:100%;text-align:left;background:#fff;border:2px solid var(--line
   <button class="tab" data-tab="order">발주 요청</button>
 </div>
 
-<!-- ===== 1. 바코드 조회 ===== -->
+<!-- 1. 바코드 조회 -->
 <section id="tab-scan" class="active">
   <div id="box"><video id="v" playsinline webkit-playsinline muted autoplay></video><div id="guide"></div></div>
   <button id="start" class="big">카메라 켜기</button>
@@ -84,7 +85,7 @@ li button{width:100%;text-align:left;background:#fff;border:2px solid var(--line
   <p id="cnt" class="small"></p>
 </section>
 
-<!-- ===== 2. 유통기한 관리 ===== -->
+<!-- 2. 유통기한 관리 -->
 <section id="tab-expiry">
   <label>사원</label>
   <select id="emp"><option value="">사원 선택</option></select>
@@ -92,6 +93,8 @@ li button{width:100%;text-align:left;background:#fff;border:2px solid var(--line
   <select id="agency" disabled><option value="">대리점 선택</option></select>
   <label>매장 (2차점)</label>
   <select id="store" disabled><option value="">매장 선택</option></select>
+  <label>또는 매장명 직접 입력</label>
+  <input id="storeCustom" type="text" placeholder="조직도에 없는 매장명 입력">
 
   <div id="storeInfo" class="hidden" style="margin-top:16px">
     <div class="row">
@@ -115,7 +118,7 @@ li button{width:100%;text-align:left;background:#fff;border:2px solid var(--line
   </div>
 </section>
 
-<!-- ===== 3. 발주 요청 ===== -->
+<!-- 3. 발주 요청 -->
 <section id="tab-order">
   <label>사원</label>
   <select id="o_emp"><option value="">사원 선택</option></select>
@@ -123,23 +126,22 @@ li button{width:100%;text-align:left;background:#fff;border:2px solid var(--line
   <select id="o_agency" disabled><option value="">대리점 선택</option></select>
   <label>매장 (2차점)</label>
   <select id="o_store" disabled><option value="">매장 선택</option></select>
+  <label>또는 매장명 직접 입력</label>
+  <input id="o_storeCustom" type="text" placeholder="조직도에 없는 매장명 입력">
 
   <div id="orderArea" class="hidden" style="margin-top:16px">
     <div class="row">
       <strong id="orderStoreTitle"></strong>
       <button id="btnOrderAdd" class="big" style="width:auto;padding:8px 14px;margin:0;font-size:14px">+ 제품 추가</button>
     </div>
-
     <div id="orderList" class="card" style="margin-top:12px;min-height:60px">
       <p class="small" style="margin:0;text-align:center">아직 담긴 제품이 없습니다</p>
     </div>
-
     <button id="btnCopyOrder" class="big">카톡용 텍스트 복사</button>
     <button id="btnClearOrder" class="big ghost">목록 비우기</button>
     <p id="omsg" class="small"></p>
   </div>
 
-  <!-- 발주 제품 추가 패널 -->
   <div id="orderAddPanel" class="card hidden" style="margin-top:14px">
     <strong>발주 제품 추가</strong>
     <input id="o_search" type="search" placeholder="제품명 또는 바코드 검색">
@@ -169,9 +171,7 @@ const omsg = (t,c)=>{ $('omsg').textContent=t; $('omsg').className=c||''; };
 const digits = s => String(s||'').replace(/\D/g,'');
 
 function showToast(text='저장되었습니다'){
-  const t=$('toast');
-  t.textContent=text;
-  t.classList.add('show');
+  const t=$('toast'); t.textContent=text; t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'),1800);
 }
 
@@ -199,8 +199,7 @@ function daysLeft(dateStr){
   return Math.ceil((d-today)/86400000);
 }
 
-let PRODUCTS=[], byFull=new Map(), byCode=new Map(), ORG=[], STOCK=[];
-let ORDER = []; // 발주 임시 목록
+let PRODUCTS=[], byFull=new Map(), byCode=new Map(), ORG=[], STOCK=[], ORDER=[];
 
 function loadLocal(){ try{return JSON.parse(localStorage.getItem(LOCAL_KEY)||'[]');}catch(e){return[];} }
 function saveLocal(data){ localStorage.setItem(LOCAL_KEY, JSON.stringify(data)); }
@@ -233,8 +232,8 @@ async function init(){
       qty:parseInt(r[6])||0, source:'sheet'
     })).filter(x=>x.code);
     STOCK = mergeStock(sheetStock, loadLocal());
-
     ORDER = loadOrder();
+
     buildEmpSelect('emp');
     buildEmpSelect('o_emp');
     msg('카메라를 켜고 바코드를 네모 칸에 맞추세요.');
@@ -258,8 +257,14 @@ function buildEmpSelect(id){
   emps.forEach(e=>{ const o=document.createElement('option'); o.value=e; o.textContent=e; sel.appendChild(o); });
 }
 
-// 공통 조직 선택 로직
-function setupOrgSelect(empId, agencyId, storeId, onStoreSelect){
+// 현재 선택된 매장명 가져오기 (셀렉트 or 직접입력)
+function getStoreName(selectId, customId){
+  const custom = $(customId).value.trim();
+  if(custom) return custom;
+  return $(selectId).value;
+}
+
+function setupOrgSelect(empId, agencyId, storeId, customId, areaId, titleId, onShow){
   $(empId).onchange = ()=>{
     const emp = $(empId).value;
     const agencies = [...new Set(ORG.filter(o=>o.emp===emp).map(o=>o.agency))].sort();
@@ -269,7 +274,8 @@ function setupOrgSelect(empId, agencyId, storeId, onStoreSelect){
     sel.disabled=!emp;
     $(storeId).innerHTML='<option value="">매장 선택</option>';
     $(storeId).disabled=true;
-    if(onStoreSelect) onStoreSelect(false);
+    $(customId).value='';
+    $(areaId).classList.add('hidden');
   };
   $(agencyId).onchange = ()=>{
     const emp=$(empId).value, agency=$(agencyId).value;
@@ -278,27 +284,38 @@ function setupOrgSelect(empId, agencyId, storeId, onStoreSelect){
     sel.innerHTML='<option value="">매장 선택</option>';
     stores.forEach(s=>{ const o=document.createElement('option'); o.value=s; o.textContent=s; sel.appendChild(o); });
     sel.disabled=!agency;
-    if(onStoreSelect) onStoreSelect(false);
+    $(customId).value='';
+    $(areaId).classList.add('hidden');
   };
   $(storeId).onchange = ()=>{
-    if(onStoreSelect) onStoreSelect(!!$(storeId).value);
+    $(customId).value='';
+    checkShow();
   };
+  $(customId).oninput = ()=>{
+    if($(customId).value.trim()) $(storeId).value='';
+    checkShow();
+  };
+  function checkShow(){
+    const name = getStoreName(storeId, customId);
+    if(name){
+      $(areaId).classList.remove('hidden');
+      $(titleId).textContent = name;
+      if(onShow) onShow();
+    } else {
+      $(areaId).classList.add('hidden');
+    }
+  }
 }
 
-setupOrgSelect('emp','agency','store',(show)=>{
-  $('storeInfo').classList.toggle('hidden',!show);
-  if(show){ $('storeTitle').textContent=$('store').value; renderExpiryList(); }
-});
-
-setupOrgSelect('o_emp','o_agency','o_store',(show)=>{
-  $('orderArea').classList.toggle('hidden',!show);
-  if(show){ $('orderStoreTitle').textContent=$('o_store').value; renderOrderList(); }
-});
+setupOrgSelect('emp','agency','store','storeCustom','storeInfo','storeTitle', renderExpiryList);
+setupOrgSelect('o_emp','o_agency','o_store','o_storeCustom','orderArea','orderStoreTitle', renderOrderList);
 
 // ===== 유통기한 =====
 function renderExpiryList(){
-  const emp=$('emp').value, agency=$('agency').value, store=$('store').value;
-  let list=STOCK.filter(s=>s.emp===emp&&s.agency===agency&&s.store===store&&s.qty>0);
+  const emp=$('emp').value;
+  const agency=$('agency').value || '-';
+  const store=getStoreName('store','storeCustom');
+  let list=STOCK.filter(s=>s.emp===emp && (s.agency===agency||agency==='-') && s.store===store && s.qty>0);
   list.sort((a,b)=>daysLeft(a.expiry)-daysLeft(b.expiry));
   const box=$('expiryList'); box.innerHTML='';
   if(!list.length){ emsg('등록된 제품이 없습니다.'); return; }
@@ -311,9 +328,12 @@ function renderExpiryList(){
     div.className='card '+cls;
     div.innerHTML=`
       <div class="row">
-        <div>
+        <div style="flex:1">
           <div style="font-weight:700">${item.name||item.code}</div>
-          <div class="small">코드 ${item.code} · ${item.expiry||'-'}</div>
+          <div class="small">코드 ${item.code}</div>
+          <div style="margin-top:6px">
+            <input type="date" class="date-edit" value="${item.expiry||''}" data-idx="${idx}">
+          </div>
         </div>
         <div style="text-align:right">
           <div class="badge ${badgeCls}">${left<0?'만료':'D-'+left}</div>
@@ -327,20 +347,42 @@ function renderExpiryList(){
       </div>`;
     box.appendChild(div);
   });
+
+  // 수량 버튼
   box.querySelectorAll('button').forEach(btn=>{
     btn.onclick=()=>{
       const item=list[+btn.dataset.idx];
       if(btn.dataset.act==='plus') item.qty++;
       if(btn.dataset.act==='minus') item.qty=Math.max(0,item.qty-1);
       if(btn.dataset.act==='del') item.qty=0;
-      const local=loadLocal().filter(s=>!(s.emp===item.emp&&s.agency===item.agency&&s.store===item.store&&s.code===item.code&&s.expiry===item.expiry));
-      if(item.qty>0) local.push({...item,source:'local'});
-      saveLocal(local);
-      STOCK=mergeStock(STOCK.filter(s=>s.source==='sheet'),local);
+      updateStockItem(item);
       renderExpiryList();
       showToast('저장되었습니다');
     };
   });
+
+  // 날짜 수정
+  box.querySelectorAll('.date-edit').forEach(inp=>{
+    inp.onchange=()=>{
+      const item=list[+inp.dataset.idx];
+      const oldKey=[item.emp,item.agency,item.store,item.code,item.expiry].join('|');
+      item.expiry = inp.value;
+      // 키 변경되므로 재저장
+      const local=loadLocal().filter(s=>[s.emp,s.agency,s.store,s.code,s.expiry].join('|')!==oldKey);
+      if(item.qty>0) local.push({...item,source:'local'});
+      saveLocal(local);
+      STOCK=mergeStock(STOCK.filter(s=>s.source==='sheet'),local);
+      renderExpiryList();
+      showToast('유통기한이 수정되었습니다');
+    };
+  });
+}
+
+function updateStockItem(item){
+  const local=loadLocal().filter(s=>!(s.emp===item.emp&&s.agency===item.agency&&s.store===item.store&&s.code===item.code&&s.expiry===item.expiry));
+  if(item.qty>0) local.push({...item,source:'local'});
+  saveLocal(local);
+  STOCK=mergeStock(STOCK.filter(s=>s.source==='sheet'),local);
 }
 
 let selectedAddProduct=null;
@@ -362,8 +404,16 @@ $('btnSaveAdd').onclick=()=>{
   if(!selectedAddProduct){alert('제품을 선택해주세요');return;}
   const expiry=$('addDate').value, qty=parseInt($('addQty').value)||0;
   if(!expiry||qty<1){alert('유통기한과 수량을 입력해주세요');return;}
+  const store=getStoreName('store','storeCustom');
   const local=loadLocal();
-  local.push({emp:$('emp').value,agency:$('agency').value,store:$('store').value,code:selectedAddProduct.code,name:selectedAddProduct.name,expiry,qty,source:'local'});
+  local.push({
+    emp:$('emp').value,
+    agency:$('agency').value||'-',
+    store,
+    code:selectedAddProduct.code,
+    name:selectedAddProduct.name,
+    expiry, qty, source:'local'
+  });
   saveLocal(local);
   STOCK=mergeStock(STOCK.filter(s=>s.source==='sheet'),local);
   $('addPanel').classList.add('hidden');
@@ -371,7 +421,7 @@ $('btnSaveAdd').onclick=()=>{
   showToast('저장되었습니다');
 };
 
-// ===== 발주 요청 =====
+// ===== 발주 =====
 function renderOrderList(){
   const box=$('orderList');
   if(!ORDER.length){
@@ -429,7 +479,6 @@ $('o_search').oninput=()=>{
 $('btnOrderSave').onclick=()=>{
   if(!selectedOrderProduct){alert('제품을 선택해주세요');return;}
   const qty=parseInt($('o_qty').value)||1;
-  // 이미 있으면 수량 합치기
   const exist=ORDER.find(o=>o.code===selectedOrderProduct.code);
   if(exist) exist.qty+=qty;
   else ORDER.push({code:selectedOrderProduct.code,name:selectedOrderProduct.name,qty});
@@ -441,18 +490,15 @@ $('btnOrderSave').onclick=()=>{
 
 $('btnCopyOrder').onclick=async()=>{
   if(!ORDER.length){ omsg('담은 제품이 없습니다.','err'); return; }
-  const store=$('o_store').value;
+  const store=getStoreName('o_store','o_storeCustom');
   let text=`[발주 요청]\n매장: ${store}\n--------------------\n`;
-  ORDER.forEach(o=>{
-    text+=`${o.code}  ${o.name}  ${o.qty}개\n`;
-  });
+  ORDER.forEach(o=>{ text+=`${o.code}  ${o.name}  ${o.qty}개\n`; });
   text+=`--------------------\n총 ${ORDER.length}품목`;
   try{
     await navigator.clipboard.writeText(text);
     omsg('복사되었습니다. 카톡에 붙여넣기 하세요.','ok');
     showToast('카톡용 텍스트 복사 완료');
   }catch(e){
-    // 폴백
     const ta=document.createElement('textarea');
     ta.value=text; document.body.appendChild(ta); ta.select();
     document.execCommand('copy'); ta.remove();
@@ -464,10 +510,7 @@ $('btnCopyOrder').onclick=async()=>{
 $('btnClearOrder').onclick=()=>{
   if(!ORDER.length) return;
   if(confirm('발주 목록을 모두 비울까요?')){
-    ORDER=[];
-    saveOrder(ORDER);
-    renderOrderList();
-    showToast('목록을 비웠습니다');
+    ORDER=[]; saveOrder(ORDER); renderOrderList(); showToast('목록을 비웠습니다');
   }
 };
 
@@ -481,7 +524,7 @@ document.querySelectorAll('.tab').forEach(t=>{
   };
 });
 
-// ===== 바코드 스캔 =====
+// 바코드 스캔
 const ZX_SRC=['https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js','https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js'];
 let stream=null,scanning=false,bd=null,zx=null,zxLoading=false,t0=0,last='',streak=0;
 const cv=document.createElement('canvas'),cx=cv.getContext('2d',{willReadFrequently:true});

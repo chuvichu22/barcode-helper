@@ -44,10 +44,11 @@ li button{width:100%;text-align:left;background:#fff;border:2px solid var(--line
 #rcode{font-size:clamp(44px,16vw,72px);font-weight:800;color:var(--acc);margin:8px 0}
 #toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:#14202b;color:#fff;padding:12px 22px;border-radius:30px;font-weight:700;font-size:15px;opacity:0;transition:opacity .3s;z-index:999;pointer-events:none;white-space:nowrap}
 #toast.show{opacity:1}
-.order-item{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}
+.order-item{padding:12px 0;border-bottom:1px solid var(--line)}
 .order-item:last-child{border-bottom:0}
-.order-qty{display:flex;align-items:center;gap:8px}
-.order-qty button{width:34px;height:34px;border-radius:8px;border:2px solid var(--line);background:#fff;font-weight:700}
+.order-qty{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px}
+.order-qty button{width:32px;height:32px;border-radius:8px;border:2px solid var(--line);background:#fff;font-weight:700}
+.unit-select{min-height:32px;font-size:13px;padding:0 8px;width:auto;margin:0}
 .date-edit{font-size:14px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;width:130px}
 </style>
 </head>
@@ -85,7 +86,7 @@ li button{width:100%;text-align:left;background:#fff;border:2px solid var(--line
   <p id="cnt" class="small"></p>
 </section>
 
-<!-- 2. 유통기한 관리 -->
+<!-- 2. 유통기한 -->
 <section id="tab-expiry">
   <label>사원</label>
   <select id="emp"><option value="">사원 선택</option></select>
@@ -146,8 +147,17 @@ li button{width:100%;text-align:left;background:#fff;border:2px solid var(--line
     <strong>발주 제품 추가</strong>
     <input id="o_search" type="search" placeholder="제품명 또는 바코드 검색">
     <ul id="o_list"></ul>
-    <label>수량</label>
-    <input id="o_qty" type="number" min="1" value="1">
+    <label>수량 유형</label>
+    <select id="o_unit">
+      <option value="qty">수량 (개)</option>
+      <option value="box">박스</option>
+      <option value="soldout">품절</option>
+      <option value="none">품목만 (수량 없음)</option>
+    </select>
+    <div id="o_qtyWrap">
+      <label>수량</label>
+      <input id="o_qty" type="number" min="1" value="1">
+    </div>
     <button id="btnOrderSave" class="big">담기</button>
     <button id="btnOrderCancel" class="big ghost">취소</button>
   </div>
@@ -197,6 +207,13 @@ function daysLeft(dateStr){
   const d=new Date(dateStr);
   const today=new Date(); today.setHours(0,0,0,0);
   return Math.ceil((d-today)/86400000);
+}
+
+function formatUnit(item){
+  if(item.unit==='soldout') return '품절';
+  if(item.unit==='none') return '';
+  if(item.unit==='box') return (item.qty||1)+'박스';
+  return (item.qty||1)+'개';
 }
 
 let PRODUCTS=[], byFull=new Map(), byCode=new Map(), ORG=[], STOCK=[], ORDER=[];
@@ -257,7 +274,6 @@ function buildEmpSelect(id){
   emps.forEach(e=>{ const o=document.createElement('option'); o.value=e; o.textContent=e; sel.appendChild(o); });
 }
 
-// 현재 선택된 매장명 가져오기 (셀렉트 or 직접입력)
 function getStoreName(selectId, customId){
   const custom = $(customId).value.trim();
   if(custom) return custom;
@@ -287,23 +303,15 @@ function setupOrgSelect(empId, agencyId, storeId, customId, areaId, titleId, onS
     $(customId).value='';
     $(areaId).classList.add('hidden');
   };
-  $(storeId).onchange = ()=>{
-    $(customId).value='';
-    checkShow();
-  };
-  $(customId).oninput = ()=>{
-    if($(customId).value.trim()) $(storeId).value='';
-    checkShow();
-  };
+  $(storeId).onchange = ()=>{ $(customId).value=''; checkShow(); };
+  $(customId).oninput = ()=>{ if($(customId).value.trim()) $(storeId).value=''; checkShow(); };
   function checkShow(){
     const name = getStoreName(storeId, customId);
     if(name){
       $(areaId).classList.remove('hidden');
       $(titleId).textContent = name;
       if(onShow) onShow();
-    } else {
-      $(areaId).classList.add('hidden');
-    }
+    } else $(areaId).classList.add('hidden');
   }
 }
 
@@ -348,7 +356,6 @@ function renderExpiryList(){
     box.appendChild(div);
   });
 
-  // 수량 버튼
   box.querySelectorAll('button').forEach(btn=>{
     btn.onclick=()=>{
       const item=list[+btn.dataset.idx];
@@ -361,13 +368,11 @@ function renderExpiryList(){
     };
   });
 
-  // 날짜 수정
   box.querySelectorAll('.date-edit').forEach(inp=>{
     inp.onchange=()=>{
       const item=list[+inp.dataset.idx];
       const oldKey=[item.emp,item.agency,item.store,item.code,item.expiry].join('|');
       item.expiry = inp.value;
-      // 키 변경되므로 재저장
       const local=loadLocal().filter(s=>[s.emp,s.agency,s.store,s.code,s.expiry].join('|')!==oldKey);
       if(item.qty>0) local.push({...item,source:'local'});
       saveLocal(local);
@@ -407,11 +412,8 @@ $('btnSaveAdd').onclick=()=>{
   const store=getStoreName('store','storeCustom');
   const local=loadLocal();
   local.push({
-    emp:$('emp').value,
-    agency:$('agency').value||'-',
-    store,
-    code:selectedAddProduct.code,
-    name:selectedAddProduct.name,
+    emp:$('emp').value, agency:$('agency').value||'-', store,
+    code:selectedAddProduct.code, name:selectedAddProduct.name,
     expiry, qty, source:'local'
   });
   saveLocal(local);
@@ -432,19 +434,36 @@ function renderOrderList(){
   ORDER.forEach((item,idx)=>{
     const div=document.createElement('div');
     div.className='order-item';
+    const unitText = formatUnit(item);
     div.innerHTML=`
-      <div>
-        <div style="font-weight:700">${item.name}</div>
-        <div class="small">코드 ${item.code}</div>
-      </div>
+      <div style="font-weight:700">${item.name}</div>
+      <div class="small">코드 ${item.code}${unitText ? ' · '+unitText : ''}</div>
       <div class="order-qty">
-        <button data-idx="${idx}" data-act="minus">-</button>
-        <span style="font-weight:800;min-width:24px;text-align:center">${item.qty}</span>
-        <button data-idx="${idx}" data-act="plus">+</button>
+        <select class="unit-select" data-idx="${idx}">
+          <option value="qty" ${item.unit==='qty'?'selected':''}>수량</option>
+          <option value="box" ${item.unit==='box'?'selected':''}>박스</option>
+          <option value="soldout" ${item.unit==='soldout'?'selected':''}>품절</option>
+          <option value="none" ${item.unit==='none'?'selected':''}>품목만</option>
+        </select>
+        <button data-idx="${idx}" data-act="minus" ${item.unit==='soldout'||item.unit==='none'?'disabled':''}>-</button>
+        <span style="font-weight:800;min-width:22px;text-align:center">${item.unit==='soldout'||item.unit==='none'?'-':(item.qty||1)}</span>
+        <button data-idx="${idx}" data-act="plus" ${item.unit==='soldout'||item.unit==='none'?'disabled':''}>+</button>
         <button data-idx="${idx}" data-act="del" style="color:var(--danger);border-color:var(--danger)">×</button>
       </div>`;
     box.appendChild(div);
   });
+
+  box.querySelectorAll('.unit-select').forEach(sel=>{
+    sel.onchange=()=>{
+      const item=ORDER[+sel.dataset.idx];
+      item.unit = sel.value;
+      if(item.unit==='soldout'||item.unit==='none') item.qty=0;
+      else if(!item.qty) item.qty=1;
+      saveOrder(ORDER);
+      renderOrderList();
+    };
+  });
+
   box.querySelectorAll('button').forEach(btn=>{
     btn.onclick=()=>{
       const idx=+btn.dataset.idx;
@@ -457,10 +476,18 @@ function renderOrderList(){
   });
 }
 
+// 수량 유형 변경 시 입력칸 보이기/숨기기
+$('o_unit').onchange = ()=>{
+  const u = $('o_unit').value;
+  $('o_qtyWrap').style.display = (u==='soldout'||u==='none') ? 'none' : 'block';
+};
+
 let selectedOrderProduct=null;
 $('btnOrderAdd').onclick=()=>{
   $('orderAddPanel').classList.remove('hidden');
-  $('o_search').value=''; $('o_list').innerHTML=''; $('o_qty').value=1;
+  $('o_search').value=''; $('o_list').innerHTML='';
+  $('o_unit').value='qty'; $('o_qty').value=1;
+  $('o_qtyWrap').style.display='block';
   selectedOrderProduct=null;
 };
 $('btnOrderCancel').onclick=()=>$('orderAddPanel').classList.add('hidden');
@@ -478,10 +505,15 @@ $('o_search').oninput=()=>{
 };
 $('btnOrderSave').onclick=()=>{
   if(!selectedOrderProduct){alert('제품을 선택해주세요');return;}
-  const qty=parseInt($('o_qty').value)||1;
+  const unit = $('o_unit').value;
+  const qty = (unit==='soldout'||unit==='none') ? 0 : (parseInt($('o_qty').value)||1);
   const exist=ORDER.find(o=>o.code===selectedOrderProduct.code);
-  if(exist) exist.qty+=qty;
-  else ORDER.push({code:selectedOrderProduct.code,name:selectedOrderProduct.name,qty});
+  if(exist){
+    exist.unit = unit;
+    exist.qty = qty;
+  } else {
+    ORDER.push({code:selectedOrderProduct.code, name:selectedOrderProduct.name, qty, unit});
+  }
   saveOrder(ORDER);
   $('orderAddPanel').classList.add('hidden');
   renderOrderList();
@@ -492,7 +524,10 @@ $('btnCopyOrder').onclick=async()=>{
   if(!ORDER.length){ omsg('담은 제품이 없습니다.','err'); return; }
   const store=getStoreName('o_store','o_storeCustom');
   let text=`[발주 요청]\n매장: ${store}\n--------------------\n`;
-  ORDER.forEach(o=>{ text+=`${o.code}  ${o.name}  ${o.qty}개\n`; });
+  ORDER.forEach(o=>{
+    const unitStr = formatUnit(o);
+    text += unitStr ? `${o.code}  ${o.name}  ${unitStr}\n` : `${o.code}  ${o.name}\n`;
+  });
   text+=`--------------------\n총 ${ORDER.length}품목`;
   try{
     await navigator.clipboard.writeText(text);

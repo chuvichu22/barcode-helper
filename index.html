@@ -15,9 +15,9 @@ h1{font-size:20px;margin:0 0 12px}
 .tab.active{background:var(--acc);color:#fff;border-color:var(--acc)}
 section{display:none}
 section.active{display:block}
-#box{position:relative;aspect-ratio:4/3;background:#000;border-radius:14px;overflow:hidden}
+#box,#obox{position:relative;aspect-ratio:4/3;background:#000;border-radius:14px;overflow:hidden;margin-top:10px}
 video{width:100%;height:100%;object-fit:cover;display:block}
-#guide{position:absolute;left:5%;right:5%;top:25%;bottom:25%;border:3px solid #fff;border-radius:10px;box-shadow:0 0 0 999px rgba(0,0,0,.35);pointer-events:none}
+#guide,#oguide{position:absolute;left:5%;right:5%;top:25%;bottom:25%;border:3px solid #fff;border-radius:10px;box-shadow:0 0 0 999px rgba(0,0,0,.35);pointer-events:none}
 button{font:inherit;cursor:pointer}
 .big{width:100%;min-height:50px;font-size:17px;font-weight:700;border:0;border-radius:12px;background:var(--acc);color:#fff;margin-top:10px}
 .ghost{background:#fff;color:var(--ink);border:2px solid var(--line)}
@@ -145,8 +145,24 @@ li button{width:100%;text-align:left;background:#fff;border:2px solid var(--line
 
   <div id="orderAddPanel" class="card hidden" style="margin-top:14px">
     <strong>발주 제품 추가</strong>
+    
+    <!-- 바코드 스캔 영역 -->
+    <button id="btnOrderScan" class="big" style="margin-top:8px">바코드 스캔하기</button>
+    <div id="orderCamBox" class="hidden">
+      <div id="obox"><video id="ov" playsinline webkit-playsinline muted autoplay></video><div id="oguide"></div></div>
+      <p id="oscanMsg" class="small">바코드를 네모 칸에 맞추세요</p>
+      <button id="btnOrderScanStop" class="big ghost">스캔 종료</button>
+    </div>
+
+    <p style="text-align:center;margin:12px 0 4px;color:var(--mut);font-size:13px">또는 검색으로 찾기</p>
     <input id="o_search" type="search" placeholder="제품명 또는 바코드 검색">
     <ul id="o_list"></ul>
+    
+    <div id="o_selected" class="hidden" style="margin-top:10px;padding:10px;background:#f0f7f4;border-radius:10px">
+      <strong id="o_selName"></strong>
+      <div class="small" id="o_selCode"></div>
+    </div>
+
     <label>수량 유형</label>
     <select id="o_unit">
       <option value="qty">수량 (개)</option>
@@ -476,21 +492,37 @@ function renderOrderList(){
   });
 }
 
-// 수량 유형 변경 시 입력칸 보이기/숨기기
 $('o_unit').onchange = ()=>{
   const u = $('o_unit').value;
   $('o_qtyWrap').style.display = (u==='soldout'||u==='none') ? 'none' : 'block';
 };
 
 let selectedOrderProduct=null;
+
+function setSelectedOrderProduct(p){
+  selectedOrderProduct = p;
+  $('o_selected').classList.remove('hidden');
+  $('o_selName').textContent = p.name;
+  $('o_selCode').textContent = '코드 '+p.code;
+  $('o_search').value = p.name;
+  $('o_list').innerHTML = '';
+}
+
 $('btnOrderAdd').onclick=()=>{
   $('orderAddPanel').classList.remove('hidden');
   $('o_search').value=''; $('o_list').innerHTML='';
   $('o_unit').value='qty'; $('o_qty').value=1;
   $('o_qtyWrap').style.display='block';
+  $('o_selected').classList.add('hidden');
+  $('orderCamBox').classList.add('hidden');
   selectedOrderProduct=null;
+  stopOrderScan();
 };
-$('btnOrderCancel').onclick=()=>$('orderAddPanel').classList.add('hidden');
+$('btnOrderCancel').onclick=()=>{
+  $('orderAddPanel').classList.add('hidden');
+  stopOrderScan();
+};
+
 $('o_search').oninput=()=>{
   const q=$('o_search').value.trim().toLowerCase();
   const ul=$('o_list'); ul.innerHTML='';
@@ -499,12 +531,13 @@ $('o_search').oninput=()=>{
     const li=document.createElement('li');
     const b=document.createElement('button');
     b.innerHTML=`<b>${n}</b><span class="small">코드 ${c}</span>`;
-    b.onclick=()=>{ selectedOrderProduct={code:c,name:n}; $('o_search').value=n; ul.innerHTML=''; };
+    b.onclick=()=> setSelectedOrderProduct({code:c,name:n});
     li.appendChild(b); ul.appendChild(li);
   });
 };
+
 $('btnOrderSave').onclick=()=>{
-  if(!selectedOrderProduct){alert('제품을 선택해주세요');return;}
+  if(!selectedOrderProduct){alert('제품을 선택하거나 스캔해주세요');return;}
   const unit = $('o_unit').value;
   const qty = (unit==='soldout'||unit==='none') ? 0 : (parseInt($('o_qty').value)||1);
   const exist=ORDER.find(o=>o.code===selectedOrderProduct.code);
@@ -516,6 +549,7 @@ $('btnOrderSave').onclick=()=>{
   }
   saveOrder(ORDER);
   $('orderAddPanel').classList.add('hidden');
+  stopOrderScan();
   renderOrderList();
   showToast('담았습니다');
 };
@@ -549,6 +583,69 @@ $('btnClearOrder').onclick=()=>{
   }
 };
 
+// ===== 발주용 바코드 스캔 =====
+let oStream=null, oScanning=false, oLast='', oStreak=0;
+
+async function startOrderScan(){
+  if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia){
+    $('oscanMsg').textContent='카메라는 https에서만 가능합니다.';
+    return;
+  }
+  try{
+    if(!oStream){
+      try{ oStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false}); }
+      catch(e){ oStream=await navigator.mediaDevices.getUserMedia({video:true,audio:false}); }
+      const v=$('ov'); v.srcObject=oStream; v.muted=true;
+      v.setAttribute('playsinline',''); v.setAttribute('webkit-playsinline','');
+    }
+    await $('ov').play();
+    $('orderCamBox').classList.remove('hidden');
+    oScanning=true; oLast=''; oStreak=0;
+    $('oscanMsg').textContent='바코드를 네모 칸에 맞추세요';
+    await initBD();
+    orderTick();
+  }catch(e){
+    $('oscanMsg').textContent='카메라를 켤 수 없습니다.';
+  }
+}
+
+function stopOrderScan(){
+  oScanning=false;
+  try{ $('ov').pause(); }catch(e){}
+  $('orderCamBox').classList.add('hidden');
+}
+
+$('btnOrderScan').onclick = startOrderScan;
+$('btnOrderScanStop').onclick = stopOrderScan;
+
+async function orderTick(){
+  if(!oScanning) return;
+  const v=$('ov'); let code=null;
+  if(v.readyState>=2 && v.videoWidth){
+    try{ if(bd) code=await readBD(v); }catch(e){ bd=false; loadZX(); }
+    if(!code && zx) code=readZX(v);
+  }
+  if(code){
+    if(!ean13ok(code)) { /* ignore */ }
+    else if(code===oLast) oStreak++;
+    else { oLast=code; oStreak=1; }
+    
+    if(oStreak>=2){
+      const p = byFull.get(code);
+      if(p){
+        if(navigator.vibrate) navigator.vibrate(60);
+        setSelectedOrderProduct(p);
+        stopOrderScan();
+        showToast('제품이 선택되었습니다');
+      } else {
+        $('oscanMsg').textContent='등록되지 않은 바코드입니다';
+        oLast=''; oStreak=0;
+      }
+    }
+  }
+  if(oScanning) setTimeout(orderTick, 120);
+}
+
 // 탭
 document.querySelectorAll('.tab').forEach(t=>{
   t.onclick=()=>{
@@ -556,10 +653,12 @@ document.querySelectorAll('.tab').forEach(t=>{
     document.querySelectorAll('section').forEach(x=>x.classList.remove('active'));
     t.classList.add('active');
     $('tab-'+t.dataset.tab).classList.add('active');
+    // 다른 탭으로 가면 발주 스캔 중지
+    if(t.dataset.tab !== 'order') stopOrderScan();
   };
 });
 
-// 바코드 스캔
+// ===== 메인 바코드 스캔 =====
 const ZX_SRC=['https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js','https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js'];
 let stream=null,scanning=false,bd=null,zx=null,zxLoading=false,t0=0,last='',streak=0;
 const cv=document.createElement('canvas'),cx=cv.getContext('2d',{willReadFrequently:true});

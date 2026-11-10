@@ -131,22 +131,22 @@ li button{width:100%;text-align:left;background:#fff;border:2px solid var(--line
   <input id="o_storeCustom" type="text" placeholder="조직도에 없는 매장명 입력">
 
   <div id="orderArea" class="hidden" style="margin-top:16px">
-    <div class="row">
-      <strong id="orderStoreTitle"></strong>
-      <button id="btnOrderAdd" class="big" style="width:auto;padding:8px 14px;margin:0;font-size:14px">+ 제품 추가</button>
-    </div>
-    <div id="orderList" class="card" style="margin-top:12px;min-height:60px">
+    <strong id="orderStoreTitle" style="display:block;margin-bottom:8px"></strong>
+
+    <div id="orderList" class="card" style="min-height:60px">
       <p class="small" style="margin:0;text-align:center">아직 담긴 제품이 없습니다</p>
     </div>
+
+    <button id="btnOrderAdd" class="big">+ 제품 추가</button>
     <button id="btnCopyOrder" class="big">카톡용 텍스트 복사</button>
-    <button id="btnClearOrder" class="big ghost">목록 비우기</button>
+    <button id="btnClearOrder" class="big ghost">목록만 비우기</button>
+    <button id="btnResetAll" class="big danger">전체 초기화</button>
     <p id="omsg" class="small"></p>
   </div>
 
   <div id="orderAddPanel" class="card hidden" style="margin-top:14px">
     <strong>발주 제품 추가</strong>
     
-    <!-- 바코드 스캔 영역 -->
     <button id="btnOrderScan" class="big" style="margin-top:8px">바코드 스캔하기</button>
     <div id="orderCamBox" class="hidden">
       <div id="obox"><video id="ov" playsinline webkit-playsinline muted autoplay></video><div id="oguide"></div></div>
@@ -189,6 +189,7 @@ const STOCK_CSV   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS1S4DfOszr
 const PREFIX = '8801005';
 const LOCAL_KEY = 'expiry_stock_v1';
 const ORDER_KEY = 'order_temp_v1';
+const ORDER_SEL_KEY = 'order_selection_v1';  // 사원/대리점/매장 선택 저장
 
 const $ = id => document.getElementById(id);
 const msg = (t,c)=>{ $('msg').textContent=t; $('msg').className=c||''; };
@@ -239,6 +240,21 @@ function saveLocal(data){ localStorage.setItem(LOCAL_KEY, JSON.stringify(data));
 function loadOrder(){ try{return JSON.parse(localStorage.getItem(ORDER_KEY)||'[]');}catch(e){return[];} }
 function saveOrder(data){ localStorage.setItem(ORDER_KEY, JSON.stringify(data)); ORDER=data; }
 
+// 발주 선택값 저장/불러오기
+function saveOrderSelection(){
+  const data = {
+    emp: $('o_emp').value,
+    agency: $('o_agency').value,
+    store: $('o_store').value,
+    storeCustom: $('o_storeCustom').value
+  };
+  localStorage.setItem(ORDER_SEL_KEY, JSON.stringify(data));
+}
+function loadOrderSelection(){
+  try{ return JSON.parse(localStorage.getItem(ORDER_SEL_KEY)||'{}'); }
+  catch(e){ return {}; }
+}
+
 async function init(){
   try{
     msg('데이터를 불러오는 중...');
@@ -269,10 +285,61 @@ async function init(){
 
     buildEmpSelect('emp');
     buildEmpSelect('o_emp');
+
+    // 저장된 발주 선택값 복원
+    restoreOrderSelection();
+
     msg('카메라를 켜고 바코드를 네모 칸에 맞추세요.');
   }catch(e){
     console.error(e);
     msg('데이터를 불러오지 못했습니다.','err');
+  }
+}
+
+function restoreOrderSelection(){
+  const sel = loadOrderSelection();
+  if(!sel.emp) return;
+
+  // 사원 복원
+  if([...$('o_emp').options].some(o=>o.value===sel.emp)){
+    $('o_emp').value = sel.emp;
+    // 대리점 목록 채우기
+    const agencies = [...new Set(ORG.filter(o=>o.emp===sel.emp).map(o=>o.agency))].sort();
+    const agencySel = $('o_agency');
+    agencySel.innerHTML = '<option value="">대리점 선택</option>';
+    agencies.forEach(a=>{
+      const o=document.createElement('option'); o.value=a; o.textContent=a; agencySel.appendChild(o);
+    });
+    agencySel.disabled = false;
+
+    if(sel.agency && agencies.includes(sel.agency)){
+      agencySel.value = sel.agency;
+      // 매장 목록 채우기
+      const stores = [...new Set(ORG.filter(o=>o.emp===sel.emp&&o.agency===sel.agency).map(o=>o.store))].sort();
+      const storeSel = $('o_store');
+      storeSel.innerHTML = '<option value="">매장 선택</option>';
+      stores.forEach(s=>{
+        const o=document.createElement('option'); o.value=s; o.textContent=s; storeSel.appendChild(o);
+      });
+      storeSel.disabled = false;
+
+      if(sel.store && stores.includes(sel.store)){
+        storeSel.value = sel.store;
+      }
+    }
+  }
+
+  // 직접 입력 매장
+  if(sel.storeCustom){
+    $('o_storeCustom').value = sel.storeCustom;
+  }
+
+  // 매장이 있으면 영역 표시
+  const storeName = getStoreName('o_store','o_storeCustom');
+  if(storeName){
+    $('orderArea').classList.remove('hidden');
+    $('orderStoreTitle').textContent = storeName;
+    renderOrderList();
   }
 }
 
@@ -296,7 +363,7 @@ function getStoreName(selectId, customId){
   return $(selectId).value;
 }
 
-function setupOrgSelect(empId, agencyId, storeId, customId, areaId, titleId, onShow){
+function setupOrgSelect(empId, agencyId, storeId, customId, areaId, titleId, onShow, isOrder){
   $(empId).onchange = ()=>{
     const emp = $(empId).value;
     const agencies = [...new Set(ORG.filter(o=>o.emp===emp).map(o=>o.agency))].sort();
@@ -308,6 +375,7 @@ function setupOrgSelect(empId, agencyId, storeId, customId, areaId, titleId, onS
     $(storeId).disabled=true;
     $(customId).value='';
     $(areaId).classList.add('hidden');
+    if(isOrder) saveOrderSelection();
   };
   $(agencyId).onchange = ()=>{
     const emp=$(empId).value, agency=$(agencyId).value;
@@ -318,9 +386,10 @@ function setupOrgSelect(empId, agencyId, storeId, customId, areaId, titleId, onS
     sel.disabled=!agency;
     $(customId).value='';
     $(areaId).classList.add('hidden');
+    if(isOrder) saveOrderSelection();
   };
-  $(storeId).onchange = ()=>{ $(customId).value=''; checkShow(); };
-  $(customId).oninput = ()=>{ if($(customId).value.trim()) $(storeId).value=''; checkShow(); };
+  $(storeId).onchange = ()=>{ $(customId).value=''; checkShow(); if(isOrder) saveOrderSelection(); };
+  $(customId).oninput = ()=>{ if($(customId).value.trim()) $(storeId).value=''; checkShow(); if(isOrder) saveOrderSelection(); };
   function checkShow(){
     const name = getStoreName(storeId, customId);
     if(name){
@@ -331,8 +400,8 @@ function setupOrgSelect(empId, agencyId, storeId, customId, areaId, titleId, onS
   }
 }
 
-setupOrgSelect('emp','agency','store','storeCustom','storeInfo','storeTitle', renderExpiryList);
-setupOrgSelect('o_emp','o_agency','o_store','o_storeCustom','orderArea','orderStoreTitle', renderOrderList);
+setupOrgSelect('emp','agency','store','storeCustom','storeInfo','storeTitle', renderExpiryList, false);
+setupOrgSelect('o_emp','o_agency','o_store','o_storeCustom','orderArea','orderStoreTitle', renderOrderList, true);
 
 // ===== 유통기한 =====
 function renderExpiryList(){
@@ -517,6 +586,7 @@ $('btnOrderAdd').onclick=()=>{
   $('orderCamBox').classList.add('hidden');
   selectedOrderProduct=null;
   stopOrderScan();
+  $('orderAddPanel').scrollIntoView({behavior:'smooth', block:'nearest'});
 };
 $('btnOrderCancel').onclick=()=>{
   $('orderAddPanel').classList.add('hidden');
@@ -578,9 +648,25 @@ $('btnCopyOrder').onclick=async()=>{
 
 $('btnClearOrder').onclick=()=>{
   if(!ORDER.length) return;
-  if(confirm('발주 목록을 모두 비울까요?')){
+  if(confirm('발주 목록만 비울까요? (매장 선택은 유지됩니다)')){
     ORDER=[]; saveOrder(ORDER); renderOrderList(); showToast('목록을 비웠습니다');
   }
+};
+
+$('btnResetAll').onclick=()=>{
+  if(!confirm('발주 목록과 매장 선택을 모두 초기화할까요?')) return;
+  ORDER=[]; saveOrder(ORDER);
+  localStorage.removeItem(ORDER_SEL_KEY);
+  $('o_emp').value='';
+  $('o_agency').innerHTML='<option value="">대리점 선택</option>';
+  $('o_agency').disabled=true;
+  $('o_store').innerHTML='<option value="">매장 선택</option>';
+  $('o_store').disabled=true;
+  $('o_storeCustom').value='';
+  $('orderArea').classList.add('hidden');
+  $('orderAddPanel').classList.add('hidden');
+  stopOrderScan();
+  showToast('전체 초기화 되었습니다');
 };
 
 // ===== 발주용 바코드 스캔 =====
@@ -626,7 +712,7 @@ async function orderTick(){
     if(!code && zx) code=readZX(v);
   }
   if(code){
-    if(!ean13ok(code)) { /* ignore */ }
+    if(!ean13ok(code)) { }
     else if(code===oLast) oStreak++;
     else { oLast=code; oStreak=1; }
     
@@ -653,7 +739,6 @@ document.querySelectorAll('.tab').forEach(t=>{
     document.querySelectorAll('section').forEach(x=>x.classList.remove('active'));
     t.classList.add('active');
     $('tab-'+t.dataset.tab).classList.add('active');
-    // 다른 탭으로 가면 발주 스캔 중지
     if(t.dataset.tab !== 'order') stopOrderScan();
   };
 });

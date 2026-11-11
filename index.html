@@ -15,9 +15,9 @@ h1{font-size:20px;margin:0 0 12px}
 .tab.active{background:var(--acc);color:#fff;border-color:var(--acc)}
 section{display:none}
 section.active{display:block}
-#box,#obox{position:relative;aspect-ratio:4/3;background:#000;border-radius:14px;overflow:hidden;margin-top:10px}
+#box,#obox,#ebox{position:relative;aspect-ratio:4/3;background:#000;border-radius:14px;overflow:hidden;margin-top:10px}
 video{width:100%;height:100%;object-fit:cover;display:block}
-#guide,#oguide{position:absolute;left:5%;right:5%;top:25%;bottom:25%;border:3px solid #fff;border-radius:10px;box-shadow:0 0 0 999px rgba(0,0,0,.35);pointer-events:none}
+#guide,#oguide,#eguide{position:absolute;left:5%;right:5%;top:25%;bottom:25%;border:3px solid #fff;border-radius:10px;box-shadow:0 0 0 999px rgba(0,0,0,.35);pointer-events:none}
 button{font:inherit;cursor:pointer}
 .big{width:100%;min-height:50px;font-size:17px;font-weight:700;border:0;border-radius:12px;background:var(--acc);color:#fff;margin-top:10px}
 .ghost{background:#fff;color:var(--ink);border:2px solid var(--line)}
@@ -71,7 +71,7 @@ li button{width:100%;text-align:left;background:#fff;border:2px solid var(--line
 
   <div id="res" class="hidden">
     <div id="rname" style="font-size:19px;font-weight:700"></div>
-    <small>회사 앱에 입력할 제품 코드</small>
+    <small>회사 앱에 입력할 제품 코드 (뒤 6자리)</small>
     <div id="rcode"></div>
     <button id="copy" class="big">제품 코드 복사</button>
     <p id="cnote"></p>
@@ -98,18 +98,34 @@ li button{width:100%;text-align:left;background:#fff;border:2px solid var(--line
   <input id="storeCustom" type="text" placeholder="조직도에 없는 매장명 입력">
 
   <div id="storeInfo" class="hidden" style="margin-top:16px">
-    <div class="row">
-      <strong id="storeTitle"></strong>
-      <button id="btnAdd" class="big" style="width:auto;padding:8px 14px;margin:0;font-size:14px">+ 제품 추가</button>
-    </div>
+    <strong id="storeTitle" style="display:block;margin-bottom:8px"></strong>
     <p id="emsg" class="small"></p>
     <div id="expiryList"></div>
+
+    <!-- 리스트 아래 버튼 -->
+    <button id="btnAdd" class="big">+ 제품 추가</button>
+    <button id="btnCopyExpiry" class="big">카톡용 텍스트 복사</button>
   </div>
 
   <div id="addPanel" class="card hidden" style="margin-top:14px">
-    <strong>제품 추가</strong>
+    <strong>유통기한 제품 추가</strong>
+
+    <button id="btnExpiryScan" class="big" style="margin-top:8px">바코드 스캔하기</button>
+    <div id="expiryCamBox" class="hidden">
+      <div id="ebox"><video id="ev" playsinline webkit-playsinline muted autoplay></video><div id="eguide"></div></div>
+      <p id="escanMsg" class="small">바코드를 네모 칸에 맞추세요</p>
+      <button id="btnExpiryScanStop" class="big ghost">스캔 종료</button>
+    </div>
+
+    <p style="text-align:center;margin:12px 0 4px;color:var(--mut);font-size:13px">또는 검색으로 찾기</p>
     <input id="addSearch" type="search" placeholder="제품명 또는 바코드 검색">
     <ul id="addList"></ul>
+
+    <div id="e_selected" class="hidden" style="margin-top:10px;padding:10px;background:#f0f7f4;border-radius:10px">
+      <strong id="e_selName"></strong>
+      <div class="small" id="e_selCode"></div>
+    </div>
+
     <label>유통기한</label>
     <input id="addDate" type="date">
     <label>수량</label>
@@ -189,7 +205,7 @@ const STOCK_CSV   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS1S4DfOszr
 const PREFIX = '8801005';
 const LOCAL_KEY = 'expiry_stock_v1';
 const ORDER_KEY = 'order_temp_v1';
-const ORDER_SEL_KEY = 'order_selection_v1';  // 사원/대리점/매장 선택 저장
+const ORDER_SEL_KEY = 'order_selection_v1';
 
 const $ = id => document.getElementById(id);
 const msg = (t,c)=>{ $('msg').textContent=t; $('msg').className=c||''; };
@@ -240,15 +256,13 @@ function saveLocal(data){ localStorage.setItem(LOCAL_KEY, JSON.stringify(data));
 function loadOrder(){ try{return JSON.parse(localStorage.getItem(ORDER_KEY)||'[]');}catch(e){return[];} }
 function saveOrder(data){ localStorage.setItem(ORDER_KEY, JSON.stringify(data)); ORDER=data; }
 
-// 발주 선택값 저장/불러오기
 function saveOrderSelection(){
-  const data = {
+  localStorage.setItem(ORDER_SEL_KEY, JSON.stringify({
     emp: $('o_emp').value,
     agency: $('o_agency').value,
     store: $('o_store').value,
     storeCustom: $('o_storeCustom').value
-  };
-  localStorage.setItem(ORDER_SEL_KEY, JSON.stringify(data));
+  }));
 }
 function loadOrderSelection(){
   try{ return JSON.parse(localStorage.getItem(ORDER_SEL_KEY)||'{}'); }
@@ -285,10 +299,7 @@ async function init(){
 
     buildEmpSelect('emp');
     buildEmpSelect('o_emp');
-
-    // 저장된 발주 선택값 복원
     restoreOrderSelection();
-
     msg('카메라를 켜고 바코드를 네모 칸에 맞추세요.');
   }catch(e){
     console.error(e);
@@ -299,42 +310,24 @@ async function init(){
 function restoreOrderSelection(){
   const sel = loadOrderSelection();
   if(!sel.emp) return;
-
-  // 사원 복원
   if([...$('o_emp').options].some(o=>o.value===sel.emp)){
     $('o_emp').value = sel.emp;
-    // 대리점 목록 채우기
     const agencies = [...new Set(ORG.filter(o=>o.emp===sel.emp).map(o=>o.agency))].sort();
     const agencySel = $('o_agency');
     agencySel.innerHTML = '<option value="">대리점 선택</option>';
-    agencies.forEach(a=>{
-      const o=document.createElement('option'); o.value=a; o.textContent=a; agencySel.appendChild(o);
-    });
+    agencies.forEach(a=>{ const o=document.createElement('option'); o.value=a; o.textContent=a; agencySel.appendChild(o); });
     agencySel.disabled = false;
-
     if(sel.agency && agencies.includes(sel.agency)){
       agencySel.value = sel.agency;
-      // 매장 목록 채우기
       const stores = [...new Set(ORG.filter(o=>o.emp===sel.emp&&o.agency===sel.agency).map(o=>o.store))].sort();
       const storeSel = $('o_store');
       storeSel.innerHTML = '<option value="">매장 선택</option>';
-      stores.forEach(s=>{
-        const o=document.createElement('option'); o.value=s; o.textContent=s; storeSel.appendChild(o);
-      });
+      stores.forEach(s=>{ const o=document.createElement('option'); o.value=s; o.textContent=s; storeSel.appendChild(o); });
       storeSel.disabled = false;
-
-      if(sel.store && stores.includes(sel.store)){
-        storeSel.value = sel.store;
-      }
+      if(sel.store && stores.includes(sel.store)) storeSel.value = sel.store;
     }
   }
-
-  // 직접 입력 매장
-  if(sel.storeCustom){
-    $('o_storeCustom').value = sel.storeCustom;
-  }
-
-  // 매장이 있으면 영역 표시
+  if(sel.storeCustom) $('o_storeCustom').value = sel.storeCustom;
   const storeName = getStoreName('o_store','o_storeCustom');
   if(storeName){
     $('orderArea').classList.remove('hidden');
@@ -404,12 +397,17 @@ setupOrgSelect('emp','agency','store','storeCustom','storeInfo','storeTitle', re
 setupOrgSelect('o_emp','o_agency','o_store','o_storeCustom','orderArea','orderStoreTitle', renderOrderList, true);
 
 // ===== 유통기한 =====
-function renderExpiryList(){
+function getCurrentExpiryList(){
   const emp=$('emp').value;
   const agency=$('agency').value || '-';
   const store=getStoreName('store','storeCustom');
   let list=STOCK.filter(s=>s.emp===emp && (s.agency===agency||agency==='-') && s.store===store && s.qty>0);
   list.sort((a,b)=>daysLeft(a.expiry)-daysLeft(b.expiry));
+  return list;
+}
+
+function renderExpiryList(){
+  const list = getCurrentExpiryList();
   const box=$('expiryList'); box.innerHTML='';
   if(!list.length){ emsg('등록된 제품이 없습니다.'); return; }
   emsg(list.length+'개 제품');
@@ -475,9 +473,57 @@ function updateStockItem(item){
   STOCK=mergeStock(STOCK.filter(s=>s.source==='sheet'),local);
 }
 
+// 유통기한 카톡 복사
+$('btnCopyExpiry').onclick = async ()=>{
+  const list = getCurrentExpiryList();
+  if(!list.length){ emsg('복사할 제품이 없습니다.','err'); return; }
+  const store = getStoreName('store','storeCustom');
+  let text = `[유통기한 현황]\n매장: ${store}\n--------------------\n`;
+  list.forEach(item=>{
+    const left = daysLeft(item.expiry);
+    const dday = left<0 ? '만료' : ('D-'+left);
+    text += `${item.code}  ${item.name}  ${item.expiry} (${dday})  ${item.qty}개\n`;
+  });
+  text += `--------------------\n총 ${list.length}품목`;
+  try{
+    await navigator.clipboard.writeText(text);
+    emsg('복사되었습니다. 카톡에 붙여넣기 하세요.','ok');
+    showToast('카톡용 텍스트 복사 완료');
+  }catch(e){
+    const ta=document.createElement('textarea');
+    ta.value=text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); ta.remove();
+    emsg('복사되었습니다. 카톡에 붙여넣기 하세요.','ok');
+    showToast('카톡용 텍스트 복사 완료');
+  }
+};
+
 let selectedAddProduct=null;
-$('btnAdd').onclick=()=>{ $('addPanel').classList.remove('hidden'); $('addSearch').value=''; $('addList').innerHTML=''; $('addDate').value=''; $('addQty').value=1; selectedAddProduct=null; };
-$('btnCancelAdd').onclick=()=>$('addPanel').classList.add('hidden');
+
+function setSelectedExpiryProduct(p){
+  selectedAddProduct = p;
+  $('e_selected').classList.remove('hidden');
+  $('e_selName').textContent = p.name;
+  $('e_selCode').textContent = '코드 '+p.code;
+  $('addSearch').value = p.name;
+  $('addList').innerHTML = '';
+}
+
+$('btnAdd').onclick=()=>{
+  $('addPanel').classList.remove('hidden');
+  $('addSearch').value=''; $('addList').innerHTML='';
+  $('addDate').value=''; $('addQty').value=1;
+  $('e_selected').classList.add('hidden');
+  $('expiryCamBox').classList.add('hidden');
+  selectedAddProduct=null;
+  stopExpiryScan();
+  $('addPanel').scrollIntoView({behavior:'smooth', block:'nearest'});
+};
+$('btnCancelAdd').onclick=()=>{
+  $('addPanel').classList.add('hidden');
+  stopExpiryScan();
+};
+
 $('addSearch').oninput=()=>{
   const q=$('addSearch').value.trim().toLowerCase();
   const ul=$('addList'); ul.innerHTML='';
@@ -486,12 +532,13 @@ $('addSearch').oninput=()=>{
     const li=document.createElement('li');
     const b=document.createElement('button');
     b.innerHTML=`<b>${n}</b><span class="small">코드 ${c}</span>`;
-    b.onclick=()=>{ selectedAddProduct={code:c,name:n}; $('addSearch').value=n; ul.innerHTML=''; };
+    b.onclick=()=> setSelectedExpiryProduct({code:c,name:n});
     li.appendChild(b); ul.appendChild(li);
   });
 };
+
 $('btnSaveAdd').onclick=()=>{
-  if(!selectedAddProduct){alert('제품을 선택해주세요');return;}
+  if(!selectedAddProduct){alert('제품을 선택하거나 스캔해주세요');return;}
   const expiry=$('addDate').value, qty=parseInt($('addQty').value)||0;
   if(!expiry||qty<1){alert('유통기한과 수량을 입력해주세요');return;}
   const store=getStoreName('store','storeCustom');
@@ -504,9 +551,70 @@ $('btnSaveAdd').onclick=()=>{
   saveLocal(local);
   STOCK=mergeStock(STOCK.filter(s=>s.source==='sheet'),local);
   $('addPanel').classList.add('hidden');
+  stopExpiryScan();
   renderExpiryList();
   showToast('저장되었습니다');
 };
+
+// 유통기한용 바코드 스캔
+let eStream=null, eScanning=false, eLast='', eStreak=0;
+
+async function startExpiryScan(){
+  if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia){
+    $('escanMsg').textContent='카메라는 https에서만 가능합니다.';
+    return;
+  }
+  try{
+    if(!eStream){
+      try{ eStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false}); }
+      catch(e){ eStream=await navigator.mediaDevices.getUserMedia({video:true,audio:false}); }
+      const v=$('ev'); v.srcObject=eStream; v.muted=true;
+      v.setAttribute('playsinline',''); v.setAttribute('webkit-playsinline','');
+    }
+    await $('ev').play();
+    $('expiryCamBox').classList.remove('hidden');
+    eScanning=true; eLast=''; eStreak=0;
+    $('escanMsg').textContent='바코드를 네모 칸에 맞추세요';
+    await initBD();
+    expiryTick();
+  }catch(e){
+    $('escanMsg').textContent='카메라를 켤 수 없습니다.';
+  }
+}
+function stopExpiryScan(){
+  eScanning=false;
+  try{ $('ev').pause(); }catch(e){}
+  $('expiryCamBox').classList.add('hidden');
+}
+$('btnExpiryScan').onclick = startExpiryScan;
+$('btnExpiryScanStop').onclick = stopExpiryScan;
+
+async function expiryTick(){
+  if(!eScanning) return;
+  const v=$('ev'); let code=null;
+  if(v.readyState>=2 && v.videoWidth){
+    try{ if(bd) code=await readBD(v); }catch(e){ bd=false; loadZX(); }
+    if(!code && zx) code=readZX(v);
+  }
+  if(code){
+    if(!ean13ok(code)) {}
+    else if(code===eLast) eStreak++;
+    else { eLast=code; eStreak=1; }
+    if(eStreak>=2){
+      const p = byFull.get(code);
+      if(p){
+        if(navigator.vibrate) navigator.vibrate(60);
+        setSelectedExpiryProduct(p);
+        stopExpiryScan();
+        showToast('제품이 선택되었습니다');
+      } else {
+        $('escanMsg').textContent='등록되지 않은 바코드입니다';
+        eLast=''; eStreak=0;
+      }
+    }
+  }
+  if(eScanning) setTimeout(expiryTick, 120);
+}
 
 // ===== 발주 =====
 function renderOrderList(){
@@ -669,7 +777,7 @@ $('btnResetAll').onclick=()=>{
   showToast('전체 초기화 되었습니다');
 };
 
-// ===== 발주용 바코드 스캔 =====
+// 발주용 바코드 스캔
 let oStream=null, oScanning=false, oLast='', oStreak=0;
 
 async function startOrderScan(){
@@ -694,13 +802,11 @@ async function startOrderScan(){
     $('oscanMsg').textContent='카메라를 켤 수 없습니다.';
   }
 }
-
 function stopOrderScan(){
   oScanning=false;
   try{ $('ov').pause(); }catch(e){}
   $('orderCamBox').classList.add('hidden');
 }
-
 $('btnOrderScan').onclick = startOrderScan;
 $('btnOrderScanStop').onclick = stopOrderScan;
 
@@ -712,10 +818,9 @@ async function orderTick(){
     if(!code && zx) code=readZX(v);
   }
   if(code){
-    if(!ean13ok(code)) { }
+    if(!ean13ok(code)) {}
     else if(code===oLast) oStreak++;
     else { oLast=code; oStreak=1; }
-    
     if(oStreak>=2){
       const p = byFull.get(code);
       if(p){
@@ -740,6 +845,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     t.classList.add('active');
     $('tab-'+t.dataset.tab).classList.add('active');
     if(t.dataset.tab !== 'order') stopOrderScan();
+    if(t.dataset.tab !== 'expiry') stopExpiryScan();
   };
 });
 
